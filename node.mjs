@@ -9,7 +9,7 @@ const keepAlive = () => {
   const keepAliveUrl = `http://localhost:${port}/keep-alive`;
   setInterval(() => {
     fetch(keepAliveUrl)
-      .then(response => console.log('Keep-alive ping successful'))
+      .then(() => console.log('Keep-alive ping successful')) // Removed unused 'response'
       .catch(error => console.error('Keep-alive ping failed:', error));
   }, 60000); // Ping every 60 seconds
 };
