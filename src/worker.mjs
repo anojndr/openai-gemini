@@ -14,30 +14,30 @@ export default {
       const apiKey = auth?.split(" ")[1];
       const assert = (success) => {
         if (!success) {
-          throw new HttpError("The specified HTTP method is not allowed for the requested resource", 400);
+          throw new HttpError(
+            "The specified HTTP method is not allowed for the requested resource",
+            400
+          );
         }
       };
       const { pathname } = new URL(request.url);
       switch (true) {
         case pathname.endsWith("/chat/completions"):
           assert(request.method === "POST");
-          return handleCompletions(await request.json(), apiKey)
-            .catch(errHandler);
+          return handleCompletions(await request.json(), apiKey).catch(errHandler);
         case pathname.endsWith("/embeddings"):
           assert(request.method === "POST");
-          return handleEmbeddings(await request.json(), apiKey)
-            .catch(errHandler);
+          return handleEmbeddings(await request.json(), apiKey).catch(errHandler);
         case pathname.endsWith("/models"):
           assert(request.method === "GET");
-          return handleModels(apiKey)
-            .catch(errHandler);
+          return handleModels(apiKey).catch(errHandler);
         default:
           throw new HttpError("404 Not Found", 404);
       }
     } catch (err) {
       return errHandler(err);
     }
-  }
+  },
 };
 
 class HttpError extends Error {
@@ -51,6 +51,12 @@ class HttpError extends Error {
 const fixCors = ({ headers, status, statusText }) => {
   headers = new Headers(headers);
   headers.set("Access-Control-Allow-Origin", "*");
+
+  // Remove compression-related headers so clients don't attempt to decompress
+  headers.delete("content-encoding");
+  headers.delete("transfer-encoding");
+  headers.delete("content-length");
+
   return { headers, status, statusText };
 };
 
@@ -60,7 +66,7 @@ const handleOPTIONS = async () => {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "*",
       "Access-Control-Allow-Headers": "*",
-    }
+    },
   });
 };
 
@@ -72,36 +78,40 @@ const API_CLIENT = "genai-js/0.21.0"; // npm view @google/generative-ai version
 const makeHeaders = (apiKey, more) => ({
   "x-goog-api-client": API_CLIENT,
   ...(apiKey && { "x-goog-api-key": apiKey }),
-  ...more
+  ...more,
 });
 
-async function handleModels (apiKey) {
+async function handleModels(apiKey) {
   const response = await fetch(`${BASE_URL}/${API_VERSION}/models`, {
     headers: makeHeaders(apiKey),
   });
   let { body } = response;
   if (response.ok) {
     const { models } = JSON.parse(await response.text());
-    body = JSON.stringify({
-      object: "list",
-      data: models.map(({ name }) => ({
-        id: name.replace("models/", ""),
-        object: "model",
-        created: 0,
-        owned_by: "",
-      })),
-    }, null, "  ");
+    body = JSON.stringify(
+      {
+        object: "list",
+        data: models.map(({ name }) => ({
+          id: name.replace("models/", ""),
+          object: "model",
+          created: 0,
+          owned_by: "",
+        })),
+      },
+      null,
+      "  "
+    );
   }
   return new Response(body, fixCors(response));
 }
 
 const DEFAULT_EMBEDDINGS_MODEL = "text-embedding-004";
-async function handleEmbeddings (req, apiKey) {
+async function handleEmbeddings(req, apiKey) {
   if (typeof req.model !== "string") {
     throw new HttpError("model is not specified", 400);
   }
   if (!Array.isArray(req.input)) {
-    req.input = [ req.input ];
+    req.input = [req.input];
   }
   let model;
   if (req.model.startsWith("models/")) {
@@ -110,37 +120,44 @@ async function handleEmbeddings (req, apiKey) {
     req.model = DEFAULT_EMBEDDINGS_MODEL;
     model = "models/" + req.model;
   }
-  const response = await fetch(`${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`, {
-    method: "POST",
-    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      "requests": req.input.map(text => ({
-        model,
-        content: { parts: { text } },
-        outputDimensionality: req.dimensions,
-      }))
-    })
-  });
+  const response = await fetch(
+    `${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`,
+    {
+      method: "POST",
+      headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        requests: req.input.map((text) => ({
+          model,
+          content: { parts: { text } },
+          outputDimensionality: req.dimensions,
+        })),
+      }),
+    }
+  );
   let { body } = response;
   if (response.ok) {
     const { embeddings } = JSON.parse(await response.text());
-    body = JSON.stringify({
-      object: "list",
-      data: embeddings.map(({ values }, index) => ({
-        object: "embedding",
-        index,
-        embedding: values,
-      })),
-      model: req.model,
-    }, null, "  ");
+    body = JSON.stringify(
+      {
+        object: "list",
+        data: embeddings.map(({ values }, index) => ({
+          object: "embedding",
+          index,
+          embedding: values,
+        })),
+        model: req.model,
+      },
+      null,
+      "  "
+    );
   }
   return new Response(body, fixCors(response));
 }
 
 const DEFAULT_MODEL = "gemini-1.5-pro-latest";
-async function handleCompletions (req, apiKey) {
+async function handleCompletions(req, apiKey) {
   let model = DEFAULT_MODEL;
-  switch(true) {
+  switch (true) {
     case typeof req.model !== "string":
       break;
     case req.model.startsWith("models/"):
@@ -152,34 +169,48 @@ async function handleCompletions (req, apiKey) {
   }
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
   let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
-  if (req.stream) { url += "?alt=sse"; }
+  if (req.stream) {
+    url += "?alt=sse";
+  }
   const response = await fetch(url, {
     method: "POST",
     headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-    body: JSON.stringify(await transformRequest(req)), // try
+    body: JSON.stringify(await transformRequest(req)),
   });
 
   let body = response.body;
   if (response.ok) {
-    let id = generateChatcmplId(); //"chatcmpl-8pMMaqXMK68B3nyDBrapTDrhkHBQK";
+    let id = generateChatcmplId();
     if (req.stream) {
       body = response.body
         .pipeThrough(new TextDecoderStream())
-        .pipeThrough(new TransformStream({
-          transform: parseStream,
-          flush: parseStreamFlush,
-          buffer: "",
-        }))
-        .pipeThrough(new TransformStream({
-          transform: toOpenAiStream,
-          flush: toOpenAiStreamFlush,
-          streamIncludeUsage: req.stream_options?.include_usage,
-          model, id, last: [],
-        }))
+        .pipeThrough(
+          new TransformStream({
+            transform: parseStream,
+            flush: parseStreamFlush,
+            buffer: "",
+          })
+        )
+        .pipeThrough(
+          new TransformStream({
+            transform: toOpenAiStream,
+            flush: toOpenAiStreamFlush,
+            streamIncludeUsage: req.stream_options?.include_usage,
+            model,
+            id,
+            last: [],
+          })
+        )
         .pipeThrough(new TextEncoderStream());
+
+      // Set "text/event-stream" to avoid compression issues
+      const corsData = fixCors(response);
+      corsData.headers.set("Content-Type", "text/event-stream; charset=utf-8");
+      return new Response(body, corsData);
     } else {
       body = await response.text();
       body = processCompletionsResponse(JSON.parse(body), model, id);
+      return new Response(body, fixCors(response));
     }
   }
   return new Response(body, fixCors(response));
@@ -192,7 +223,7 @@ const harmCategory = [
   "HARM_CATEGORY_HARASSMENT",
   "HARM_CATEGORY_CIVIC_INTEGRITY",
 ];
-const safetySettings = harmCategory.map(category => ({
+const safetySettings = harmCategory.map((category) => ({
   category,
   threshold: "BLOCK_NONE",
 }));
@@ -207,9 +238,9 @@ const fieldsMap = {
   frequency_penalty: "frequencyPenalty",
   presence_penalty: "presencePenalty",
 };
+
 const transformConfig = (req) => {
   let cfg = {};
-  //if (typeof req.stop === "string") { req.stop = [req.stop]; } // no need
   for (let key in req) {
     const matchedKey = fieldsMap[key];
     if (matchedKey) {
@@ -217,7 +248,7 @@ const transformConfig = (req) => {
     }
   }
   if (req.response_format) {
-    switch(req.response_format.type) {
+    switch (req.response_format.type) {
       case "json_schema":
         cfg.responseSchema = req.response_format.json_schema?.schema;
         if (cfg.responseSchema && "enum" in cfg.responseSchema) {
@@ -269,15 +300,9 @@ const parseImg = async (url) => {
 const transformMsg = async ({ role, content }) => {
   const parts = [];
   if (!Array.isArray(content)) {
-    // system, user: string
-    // assistant: string or null (Required unless tool_calls is specified.)
     parts.push({ text: content });
     return { role, parts };
   }
-  // user:
-  // An array of content parts with a defined type.
-  // Supported options differ based on the model being used to generate the response.
-  // Can contain text, image, or audio inputs.
   for (const item of content) {
     switch (item.type) {
       case "text":
@@ -291,21 +316,24 @@ const transformMsg = async ({ role, content }) => {
           inlineData: {
             mimeType: "audio/" + item.input_audio.format,
             data: item.input_audio.data,
-          }
+          },
         });
         break;
       default:
         throw new TypeError(`Unknown "content" item type: "${item.type}"`);
     }
   }
-  if (content.every(item => item.type === "image_url")) {
-    parts.push({ text: "" }); // to avoid "Unable to submit request because it must have a text parameter"
+  if (content.every((item) => item.type === "image_url")) {
+    // Must have at least some text part
+    parts.push({ text: "" });
   }
   return { role, parts };
 };
 
 const transformMessages = async (messages) => {
-  if (!messages) { return; }
+  if (!messages) {
+    return;
+  }
   const contents = [];
   let system_instruction;
   for (const item of messages) {
@@ -320,37 +348,39 @@ const transformMessages = async (messages) => {
   if (system_instruction && contents.length === 0) {
     contents.push({ role: "model", parts: { text: " " } });
   }
-  //console.info(JSON.stringify(contents, 2));
   return { system_instruction, contents };
 };
 
 const transformRequest = async (req) => ({
-  ...await transformMessages(req.messages),
+  ...(await transformMessages(req.messages)),
   safetySettings,
   generationConfig: transformConfig(req),
 });
 
 const generateChatcmplId = () => {
-  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  const randomChar = () => characters[Math.floor(Math.random() * characters.length)];
-  return "chatcmpl-" + Array.from({ length: 29 }, randomChar).join("");
+  const characters =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const randomChar = () =>
+    characters[Math.floor(Math.random() * characters.length)];
+  return (
+    "chatcmpl-" + Array.from({ length: 29 }, randomChar).join("")
+  );
 };
 
-const reasonsMap = { //https://ai.google.dev/api/rest/v1/GenerateContentResponse#finishreason
-  //"FINISH_REASON_UNSPECIFIED": // Default value. This value is unused.
-  "STOP": "stop",
-  "MAX_TOKENS": "length",
-  "SAFETY": "content_filter",
-  "RECITATION": "content_filter",
-  //"OTHER": "OTHER",
-  // :"function_call",
+const reasonsMap = {
+  STOP: "stop",
+  MAX_TOKENS: "length",
+  SAFETY: "content_filter",
+  RECITATION: "content_filter",
 };
+
 const SEP = "\n\n|>";
 const transformCandidates = (key, cand) => ({
-  index: cand.index || 0, // 0-index is absent in new -002 models response
+  index: cand.index || 0,
   [key]: {
     role: "assistant",
-    content: cand.content?.parts.map(p => p.text).join(SEP) },
+    content: cand.content?.parts.map((p) => p.text).join(SEP),
+  },
   logprobs: null,
   finish_reason: reasonsMap[cand.finishReason] || cand.finishReason,
 });
@@ -360,50 +390,60 @@ const transformCandidatesDelta = transformCandidates.bind(null, "delta");
 const transformUsage = (data) => ({
   completion_tokens: data.candidatesTokenCount,
   prompt_tokens: data.promptTokenCount,
-  total_tokens: data.totalTokenCount
+  total_tokens: data.totalTokenCount,
 });
 
 const processCompletionsResponse = (data, model, id) => {
   return JSON.stringify({
     id,
     choices: data.candidates.map(transformCandidatesMessage),
-    created: Math.floor(Date.now()/1000),
+    created: Math.floor(Date.now() / 1000),
     model,
-    //system_fingerprint: "fp_69829325d0",
     object: "chat.completion",
     usage: transformUsage(data.usageMetadata),
   });
 };
 
 const responseLineRE = /^data: (.*)(?:\n\n|\r\r|\r\n\r\n)/;
-async function parseStream (chunk, controller) {
+async function parseStream(chunk, controller) {
   chunk = await chunk;
-  if (!chunk) { return; }
+  if (!chunk) {
+    return;
+  }
   this.buffer += chunk;
-  do {
+  while (true) {
     const match = this.buffer.match(responseLineRE);
-    if (!match) { break; }
+    if (!match) {
+      break;
+    }
     controller.enqueue(match[1]);
     this.buffer = this.buffer.substring(match[0].length);
-  } while (true); // eslint-disable-line no-constant-condition
+  }
 }
-async function parseStreamFlush (controller) {
+async function parseStreamFlush(controller) {
   if (this.buffer) {
     console.error("Invalid data:", this.buffer);
     controller.enqueue(this.buffer);
   }
 }
 
-function transformResponseStream (data, stop, first) {
+function transformResponseStream(data, stop, first) {
   const item = transformCandidatesDelta(data.candidates[0]);
-  if (stop) { item.delta = {}; } else { item.finish_reason = null; }
-  if (first) { item.delta.content = ""; } else { delete item.delta.role; }
+  if (stop) {
+    item.delta = {};
+  } else {
+    item.finish_reason = null;
+  }
+  if (first) {
+    item.delta.content = "";
+  } else {
+    delete item.delta.role;
+  }
   const output = {
     id: this.id,
     choices: [item],
-    created: Math.floor(Date.now()/1000),
+    created: Math.floor(Date.now() / 1000),
     model: this.model,
-    //system_fingerprint: "fp_69829325d0",
     object: "chat.completion.chunk",
   };
   if (data.usageMetadata && this.streamIncludeUsage) {
@@ -411,18 +451,21 @@ function transformResponseStream (data, stop, first) {
   }
   return "data: " + JSON.stringify(output) + delimiter;
 }
+
 const delimiter = "\n\n";
-async function toOpenAiStream (chunk, controller) {
+async function toOpenAiStream(chunk, controller) {
   const transform = transformResponseStream.bind(this);
   const line = await chunk;
-  if (!line) { return; }
+  if (!line) {
+    return;
+  }
   let data;
   try {
     data = JSON.parse(line);
   } catch (err) {
     console.error(line);
     console.error(err);
-    const length = this.last.length || 1; // at least 1 error msg
+    const length = this.last.length || 1; 
     const candidates = Array.from({ length }, (_, index) => ({
       finishReason: "error",
       content: { parts: [{ text: err }] },
@@ -431,17 +474,22 @@ async function toOpenAiStream (chunk, controller) {
     data = { candidates };
   }
   const cand = data.candidates[0];
-  console.assert(data.candidates.length === 1, "Unexpected candidates count: %d", data.candidates.length);
-  cand.index = cand.index || 0; // absent in new -002 models response
+  console.assert(
+    data.candidates.length === 1,
+    "Unexpected candidates count: %d",
+    data.candidates.length
+  );
+  cand.index = cand.index || 0;
   if (!this.last[cand.index]) {
     controller.enqueue(transform(data, false, "first"));
   }
   this.last[cand.index] = data;
-  if (cand.content) { // prevent empty data (e.g. when MAX_TOKENS)
+  if (cand.content) {
     controller.enqueue(transform(data));
   }
 }
-async function toOpenAiStreamFlush (controller) {
+
+async function toOpenAiStreamFlush(controller) {
   const transform = transformResponseStream.bind(this);
   if (this.last.length > 0) {
     for (const data of this.last) {
