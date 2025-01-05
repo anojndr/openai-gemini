@@ -65,6 +65,18 @@ which is necessary for continuous integration (CI).
 - _Worker_ [limits](https://developers.cloudflare.com/workers/platform/limits/#worker-limits)
 
 
+## Deploy to Render.com
+
+1. Push your code to a Git repository (e.g., GitHub or GitLab).
+2. Sign in to [Render.com](https://render.com/).
+3. Create a new Web Service and connect your repository.
+4. Render will automatically detect the `render.yaml` file and configure the service.
+5. Set any required environment variables (e.g., API keys) in the Render dashboard.
+6. Deploy your application.
+
+Once deployed, your OpenAI-Gemini proxy will be accessible at the provided Render URL.
+
+
 ### Deploy to Deno
 
 See details [here](https://github.com/PublicAffairs/openai-gemini/discussions/19).
